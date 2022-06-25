@@ -1,0 +1,120 @@
+---
+- hosts: all
+  become: true
+  vars:
+    - mysql_root_password: "redhat"
+    - http_conf: "server.com"
+    - http_host: "server.com"
+    - http_port: "80"
+  tasks:
+   - name: update all repos
+     command: "apt update"
+
+   - name: Update all packages
+     apt:
+      name: "*"
+      state: latest
+  
+   - name: Install LEMP Packages
+     apt: 
+       name: "{{ item }}"
+       state: latest
+     loop: ['nginx','mysql-server','python3-pymysql','php8.1-fpm','php-mysql']
+  
+# Nginx Configuration
+  
+   - name: Sets Nginx conf file
+     template:
+       src: "nginx.conf.j2"
+       dest: "/etc/nginx/sites-available/{{ http_conf }}"
+
+   - name: Enables new site
+     file:
+       src: "/etc/nginx/sites-available/{{ http_conf }}"
+       dest: "/etc/nginx/sites-enabled/{{ http_conf }}"
+       state: link
+     notify: Reload Nginx
+  
+   - name: Removes "default" site
+     file:
+       path: "/etc/nginx/sites-enabled/default"
+       state: absent
+     notify: Reload Nginx
+
+# MySQL Configuration
+
+   - name: Sets the root password
+     mysql_user:
+       name: root
+       password: "{{ mysql_root_password }}"
+       login_unix_socket: /var/run/mysqld/mysqld.sock
+     ignore_errors: true
+
+   - name: Removes all anonymous user accounts
+     mysql_user:
+       name: ''
+       host_all: yes
+       state: absent
+       login_user: root
+       login_password: "{{ mysql_root_password }}"
+
+   - name: Removes the MySQL test database
+     mysql_db:
+       name: test
+       state: absent
+       login_user: root
+       login_password: "{{ mysql_root_password }}"
+
+    
+   - name: Creates the MySQL wordpress database
+     mysql_db:
+       name: wordpress
+       state: present
+       login_user: root
+       login_password: "{{ mysql_root_password }}"
+
+# UFW Configuration
+
+   - name: "UFW - Allow HTTP on port {{ http_port }}"
+     ufw:
+       rule: allow
+       port: "{{ http_port }}"
+       proto: tcp
+
+# Sets Up PHP Info Page
+   - name: Download wordpress tar in current directory
+     get_url:
+      url: https://wordpress.org/latest.tar.gz 
+      dest: "{{ ansible_facts['env']['HOME'] }}" 
+   
+   - name:
+     unarchive:
+       src: "{{ ansible_facts['env']['HOME'] }}/wordpress-6.0.tar.gz"
+       dest: "{{ ansible_facts['env']['HOME'] }}"
+       remote_src: true
+
+   - name: Sets Up PHP Info Page
+     copy:
+       src: "{{ ansible_facts['env']['HOME'] }}/wordpress/"
+       dest: "/var/www/{{ http_host }}/"
+       owner: "{{ ansible_user_id }}"
+       group: "{{ ansible_user_id }}"
+       remote_src: true
+
+   - name: set up the wp-config file
+     copy:
+      src: wp-config-sample.php
+      dest: "/var/www/{{ http_host }}/wp-config.php"
+
+# Handlers
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
